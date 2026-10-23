@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import { inflateRawSync } from "node:zlib";
 
 const root = process.cwd();
 const rawDir = path.join(root, "data", "raw");
@@ -218,14 +219,48 @@ async function ensureZip(name, url) {
   return zipPath;
 }
 
+async function unzip(zipPath, destinationDir) {
+  const zip = await readFile(zipPath);
+  if (zip.length < 22 || zip.readUInt32LE(0) !== 0x04034b50) {
+    throw new Error(`Downloaded file is not a ZIP archive: ${zipPath}`);
+  }
+  let directory = -1;
+  const scanFrom = Math.max(0, zip.length - 22 - 65535);
+  for (let index = zip.length - 22; index >= scanFrom; index -= 1) {
+    if (zip.readUInt32LE(index) === 0x06054b50) {
+      directory = index;
+      break;
+    }
+  }
+  if (directory < 0) throw new Error(`ZIP directory is missing: ${zipPath}`);
+  const count = zip.readUInt16LE(directory + 10);
+  let cursor = zip.readUInt32LE(directory + 16);
+  for (let entry = 0; entry < count; entry += 1) {
+    if (zip.readUInt32LE(cursor) !== 0x02014b50) throw new Error(`Unexpected ZIP entry in ${zipPath}`);
+    const method = zip.readUInt16LE(cursor + 10);
+    const compressedSize = zip.readUInt32LE(cursor + 20);
+    const nameLength = zip.readUInt16LE(cursor + 28);
+    const extraLength = zip.readUInt16LE(cursor + 30);
+    const commentLength = zip.readUInt16LE(cursor + 32);
+    const localOffset = zip.readUInt32LE(cursor + 42);
+    const name = zip.toString("utf8", cursor + 46, cursor + 46 + nameLength);
+    cursor += 46 + nameLength + extraLength + commentLength;
+    if (!name || name.endsWith("/")) continue;
+    const dataStart = localOffset + 30 + zip.readUInt16LE(localOffset + 26) + zip.readUInt16LE(localOffset + 28);
+    const compressed = zip.subarray(dataStart, dataStart + compressedSize);
+    const bytes = method === 0 ? compressed : method === 8 ? inflateRawSync(compressed) : null;
+    if (!bytes) throw new Error(`Unsupported ZIP compression for ${name}`);
+    const output = path.join(destinationDir, path.basename(name));
+    await writeFile(output, bytes);
+    console.log("Unzipped", path.basename(name));
+  }
+}
+
 async function buildGeography() {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
   const zctaZip = await ensureZip("zcta.zip", ZCTA_URL);
   const placeZip = await ensureZip("places.zip", PLACE_URL);
-  await execFileAsync("tar", ["-xf", zctaZip, "-C", rawDir]);
-  await execFileAsync("tar", ["-xf", placeZip, "-C", rawDir]);
+  await unzip(zctaZip, rawDir);
+  await unzip(placeZip, rawDir);
 
   const zctaRows = parsePipe(await readFile(path.join(rawDir, "2025_Gaz_zcta_national.txt"), "utf8"));
   const zcta = {};
