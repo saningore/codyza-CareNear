@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "*": ["./data/hrsa-sites.json", "./data/zcta.json", "./data/places.json"],
+    "/api/maplibre-worker": ["./node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs"],
   },
   async headers() {
     return [

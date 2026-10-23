@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useId, useState } from "react";
+import { FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import ResultsMap from "@/components/ResultsMap";
 import { categoryText, FactList } from "@/components/FactList";
+import { facilityKey, hasCoordinates } from "@/lib/map-points";
 import { CATEGORIES, type CategoryId, type Facility, type SearchOrigin, type SearchResponse } from "@/lib/types";
 
 type Suggestion = { label: string; latitude: number; longitude: number; precision: SearchOrigin["precision"]; state: string | null };
@@ -23,6 +24,11 @@ export default function SearchExperience() {
   const [phase, setPhase] = useState<"idle" | "searching">("idle");
   const [error, setError] = useState("");
   const [view, setView] = useState<"map" | "list">("list");
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeSource, setActiveSource] = useState<"map" | "list" | null>(null);
+  const [accuracyMeters, setAccuracyMeters] = useState<number | null>(null);
+  const [frameKey, setFrameKey] = useState("");
+  const pendingAccuracy = useRef<number | null>(null);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -51,6 +57,8 @@ export default function SearchExperience() {
     setError("");
     setOrigin(next);
     setOpen(false);
+    setActiveId(null);
+    setActiveSource(null);
     try {
       const params = new URLSearchParams({
         lat: String(next.latitude),
@@ -64,6 +72,9 @@ export default function SearchExperience() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Healthcare records are temporarily unavailable. Try again in a few minutes.");
       setResult(payload as SearchResponse);
+      setAccuracyMeters(next.precision === "device" ? pendingAccuracy.current : null);
+      if (next.precision !== "device") pendingAccuracy.current = null;
+      setFrameKey(`${next.latitude.toFixed(5)}:${next.longitude.toFixed(5)}:${nextRadius}:${next.precision}:${Date.now()}`);
     } catch (caught) {
       setResult(null);
       setError(caught instanceof Error ? caught.message : "Healthcare records are temporarily unavailable. Try again in a few minutes.");
@@ -103,6 +114,7 @@ export default function SearchExperience() {
     setPhase("searching");
     setError("");
     navigator.geolocation.getCurrentPosition(async (position) => {
+      pendingAccuracy.current = Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null;
       await searchAt({
         label: "Your current location",
         latitude: position.coords.latitude,
@@ -120,8 +132,31 @@ export default function SearchExperience() {
     setSelected((current) => current.includes(category) ? current.filter((item) => item !== category) : [...current, category]);
   }
 
-  const facilities = (result?.facilities ?? []).filter((facility) => facility.categories.some((category) => selected.includes(category)));
+  const facilities = useMemo(
+    () => (result?.facilities ?? []).filter((facility) => facility.categories.some((category) => selected.includes(category))),
+    [result, selected],
+  );
   const counts = result?.counts;
+
+  useEffect(() => {
+    if (!activeId) return;
+    if (!facilities.some((facility) => facilityKey(facility) === activeId)) {
+      setActiveId(null);
+      setActiveSource(null);
+    }
+  }, [facilities, activeId]);
+
+  useEffect(() => {
+    if (activeSource !== "map" || !activeId) return;
+    const card = document.querySelector(`[data-facility-key="${CSS.escape(activeId)}"]`);
+    if (!(card instanceof HTMLElement) || card.getClientRects().length === 0) return;
+    card.scrollIntoView({ block: "nearest" });
+  }, [activeId, activeSource]);
+
+  function highlight(id: string | null, source: "map" | "list") {
+    setActiveSource(id ? source : null);
+    setActiveId(id);
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -244,12 +279,31 @@ export default function SearchExperience() {
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
             <div className={view === "list" ? "hidden lg:block" : "block"}>
-              <ResultsMap origin={result.origin} facilities={facilities} />
-              <p className="mt-2 text-xs text-ink/60">Map tiles © OpenStreetMap contributors, via OpenFreeMap. A listing without a pin has no confirmed coordinates.</p>
+              <ResultsMap
+                origin={result.origin}
+                facilities={facilities}
+                frameKey={frameKey}
+                accuracyMeters={accuracyMeters}
+                activeId={activeId}
+                activeSource={activeSource}
+                onActiveId={(id) => highlight(id, "map")}
+              />
+              <p className="mt-2 text-xs text-ink/60">Map tiles © OpenStreetMap contributors, via OpenFreeMap.</p>
             </div>
             <section aria-busy={phase === "searching"} className={`max-h-[560px] space-y-3 overflow-auto pr-1 ${view === "map" ? "hidden lg:block" : "block"}`}>
                 <h2 className="font-serif text-2xl font-semibold">Nearby listings</h2>
-                {facilities.map((facility) => <ResultCard key={`${facility.source}-${facility.id}`} facility={facility} />)}
+                {facilities.map((facility) => (
+                  <ResultCard
+                    key={`${facility.source}-${facility.id}`}
+                    facility={facility}
+                    active={facilityKey(facility) === activeId}
+                    onHighlight={(next) => highlight(next ? facilityKey(facility) : null, "list")}
+                    onShowOnMap={() => {
+                      setView("map");
+                      highlight(facilityKey(facility), "list");
+                    }}
+                  />
+                ))}
             </section>
           </div>
         </>
@@ -258,17 +312,47 @@ export default function SearchExperience() {
   );
 }
 
-function ResultCard({ facility }: { facility: Facility }) {
+function ResultCard({
+  facility,
+  active,
+  onHighlight,
+  onShowOnMap,
+}: {
+  facility: Facility;
+  active: boolean;
+  onHighlight: (active: boolean) => void;
+  onShowOnMap: () => void;
+}) {
+  const pinned = hasCoordinates(facility);
   return (
-    <article className="rounded-3xl border border-line bg-card p-4">
+    <article
+      data-facility-key={facilityKey(facility)}
+      data-pinned={pinned ? "true" : "false"}
+      data-active={active ? "true" : "false"}
+      onMouseEnter={() => onHighlight(true)}
+      onMouseLeave={() => onHighlight(false)}
+      onFocusCapture={() => onHighlight(true)}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget;
+        if (!(next instanceof Node) || !event.currentTarget.contains(next)) onHighlight(false);
+      }}
+      className={`rounded-3xl border p-4 ${active ? "border-teal bg-moss" : "border-line bg-card"}`}
+    >
       <p className="text-xs font-bold uppercase tracking-wide text-teal">{categoryText(facility)}</p>
       <h3 className="mt-1 font-serif text-xl font-semibold leading-tight">{facility.name}</h3>
       {facility.aka && <p className="text-sm text-ink/70">Also listed as {facility.aka}</p>}
       <div className="mt-3"><FactList facility={facility} /></div>
       <p className="mt-3 text-xs text-ink/60">Retrieved {new Date(facility.retrievedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</p>
-      <Link className="mt-3 inline-flex rounded-full bg-pine px-4 py-2 text-sm font-bold text-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal" href={`/facility/${facility.source}/${encodeURIComponent(facility.id)}`}>
-        View record
-      </Link>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {pinned && (
+          <button type="button" className="inline-flex rounded-full border border-teal px-4 py-2 text-sm font-bold text-teal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal lg:hidden" onClick={onShowOnMap}>
+            Show on map
+          </button>
+        )}
+        <Link className="inline-flex rounded-full bg-pine px-4 py-2 text-sm font-bold text-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal" href={`/facility/${facility.source}/${encodeURIComponent(facility.id)}`}>
+          View record
+        </Link>
+      </div>
     </article>
   );
 }

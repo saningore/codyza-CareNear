@@ -55,6 +55,14 @@ test.describe("CareNear in the browser", () => {
     await expect(page.getByText("Distances are measured from the center of this ZIP code.")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Nearby listings" })).toBeVisible();
     await expect(page.getByText("Map tiles © OpenStreetMap contributors")).toBeVisible();
+    await expect(page.locator("[data-map-ready='true']")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("list", { name: "Map legend" })).toContainText("Center of ZIP code 10001");
+    const pinned = page.locator("article[data-pinned='true']").first();
+    await expect(pinned).toBeVisible();
+    const pinName = await pinned.getByRole("heading").innerText();
+    await pinned.hover();
+    await expect(pinned).toHaveAttribute("data-active", "true");
+    await expect(page.locator(".maplibregl-popup")).toContainText(pinName);
     const cards = page.getByRole("article");
     await expect(cards.first()).toBeVisible();
     expect(await cards.count()).toBeGreaterThan(3);
@@ -67,6 +75,16 @@ test.describe("CareNear in the browser", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.getByText(/Source:/)).toBeVisible();
     await expect(page.getByRole("link", { name: "Codyza" })).toBeVisible();
+  });
+
+  test("pins the device location on the map", async ({ page, context }) => {
+    await context.grantPermissions(["geolocation"]);
+    await context.setGeolocation({ latitude: 40.7506, longitude: -73.9971 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Use my location" }).click();
+    await expect(page.getByText(/listings within 25 miles of Your current location/)).toBeVisible({ timeout: 150_000 });
+    await expect(page.locator("[data-map-ready='true']")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("list", { name: "Map legend" })).toContainText("Your current location");
   });
 
   test("asks for a ZIP when location permission is denied", async ({ page }) => {

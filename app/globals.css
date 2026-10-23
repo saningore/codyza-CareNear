@@ -31,8 +31,36 @@ body { background: var(--color-paper); color: var(--color-ink); }
 .skip-link:focus { top: 1rem; }
 
 .maplibregl-popup-content {
-  border-radius: 12px;
-  padding: 0.75rem 0.9rem;
+  border-radius: 16px;
+  padding: 0.85rem 1rem;
   color: #172033;
+  font-family: var(--font-atkinson), ui-sans-serif, sans-serif;
+}
+.care-popup-name {
+  margin: 0;
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.care-popup-meta {
+  margin: 0.35rem 0 0;
+  color: #0c5c56;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.care-popup-distance {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+}
+.care-popup-link {
+  display: inline-flex;
+  margin-top: 0.55rem;
+  color: #0c5c56;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .maplibregl-ctrl-attrib { font-size: 11px; }
